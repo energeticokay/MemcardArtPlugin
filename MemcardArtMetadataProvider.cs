@@ -3,6 +3,67 @@ using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+
+namespace MemcardArtPlugin
+{
+    public class MemcardArtMetadataProvider : OnDemandMetadataProvider
+    {
+        private readonly MetadataRequestOptions options;
+        private readonly MemcardArtPlugin plugin;
+
+        private const string baseUrl = "https://memcard.art";
+
+        public MemcardArtMetadataProvider(MetadataRequestOptions options, MemcardArtPlugin plugin)
+        {
+            this.options = options;
+            this.plugin = plugin;
+        }
+
+        public override List<MetadataField> AvailableFields => new List<MetadataField> { MetadataField.Icon };
+
+        public override MetadataFile GetIcon(GetMetadataFieldArgs args)
+        {
+            var gameName = options.GameData.Name;
+
+            try
+            {
+                string htmlSource = string.Empty;
+
+                using (var webView = plugin.PlayniteApi.WebViews.CreateOffscreenView())
+                {
+                    webView.NavigateAndWait(baseUrl);
+                    // Wait for javascript to load the gallery
+                    Thread.Sleep(4000); 
+                    htmlSource = webView.GetPageSource();
+                }
+
+                // --- DEBUG OUTPUT ---
+                // Save the website's HTML to your desktop
+                string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                string debugFile = Path.Combine(desktopPath, "MemcardArt_Debug.txt");
+                File.WriteAllText(debugFile, htmlSource);
+                
+                // Pop up a message so you know it worked!
+                plugin.PlayniteApi.Dialogs.ShowMessage(
+                    $"Success! The code for memcard.art has been saved to your Desktop.\n\n" +
+                    $"Please open MemcardArt_Debug.txt, search for {gameName}, and show the AI what the code looks like!"
+                );
+            }
+            catch (Exception ex)
+            {
+                plugin.PlayniteApi.Dialogs.ShowErrorMessage("Plugin Error: " + ex.Message);
+            }
+
+            return base.GetIcon(args);
+        }
+    }
+}using Playnite.SDK;
+using Playnite.SDK.Models;
+using Playnite.SDK.Plugins;
+using System;
+using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading;
 
