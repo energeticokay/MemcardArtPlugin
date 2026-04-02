@@ -1,11 +1,10 @@
-using HtmlAgilityPack;
 using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace MemcardArtPlugin
 {
@@ -17,6 +16,11 @@ namespace MemcardArtPlugin
 
         private const string baseUrl = "https://memcard.art";
 
+        // We cache the HTML so bulk downloads are blazing fast
+        private static string cachedHtml = string.Empty;
+        private static DateTime cacheTime = DateTime.MinValue;
+        private static readonly object cacheLock = new object();
+
         public MemcardArtMetadataProvider(MetadataRequestOptions options, MemcardArtPlugin plugin)
         {
             this.options = options;
@@ -26,9 +30,7 @@ namespace MemcardArtPlugin
         private string NormalizeGameName(string name)
         {
             if (string.IsNullOrEmpty(name)) return string.Empty;
-            // Remove special characters, spaces, and make lowercase to ensure matching works properly
-            var normalized = Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9]", "");
-            return normalized;
+            return Regex.Replace(name.ToLowerInvariant(), @"[^a-z0-9]", "");
         }
 
         public override List<MetadataField> AvailableFields => new List<MetadataField> { MetadataField.Icon };
@@ -42,39 +44,63 @@ namespace MemcardArtPlugin
             {
                 logger.Info($"Fetching Memcard.art for: {gameName}");
 
-                // Load the HTML from memcard.art
-                var web = new HtmlWeb();
-                var doc = web.Load(baseUrl);
+                string htmlSource = string.Empty;
 
-                // Find all image tags on the site that have an alt attribute
-                var imageNodes = doc.DocumentNode.SelectNodes("//img[@alt]");
-
-                if (imageNodes != null)
+                // Lock ensures multiple games downloading at once don't spawn 50 webviews
+                lock (cacheLock)
                 {
-                    foreach (var node in imageNodes)
+                    if (string.IsNullOrEmpty(cachedHtml) || (DateTime.Now - cacheTime).TotalHours > 1)
                     {
-                        var altText = node.GetAttributeValue("alt", "");
-                        var srcText = node.GetAttributeValue("src", "");
+                        logger.Info("Loading Memcard.art HTML via invisible browser...");
+                        using (var webView = plugin.PlayniteApi.WebViews.CreateOffscreenView())
+                        {
+                            webView.NavigateAndWait(baseUrl);
+                            // Give JavaScript 4 seconds to render the gallery
+                            Thread.Sleep(4000); 
+                            cachedHtml = webView.GetPageSource();
+                            cacheTime = DateTime.Now;
+                        }
+                    }
+                    htmlSource = cachedHtml;
+                }
 
-                        // Skip if no source or alt text
-                        if (string.IsNullOrEmpty(altText) || string.IsNullOrEmpty(srcText)) continue;
+                if (string.IsNullOrEmpty(htmlSource))
+                {
+                    logger.Error("Failed to get HTML from memcard.art WebView.");
+                    return base.GetIcon(args);
+                }
+
+                // Safely search for image tags without external DLLs
+                var imgRegex = new Regex(@"<img[^>]+>", RegexOptions.IgnoreCase);
+                var srcRegex = new Regex(@"src=[""']([^""']+)[""']", RegexOptions.IgnoreCase);
+                var altRegex = new Regex(@"alt=[""']([^""']+)[""']", RegexOptions.IgnoreCase);
+
+                var matches = imgRegex.Matches(htmlSource);
+                foreach (Match match in matches)
+                {
+                    var imgTag = match.Value;
+                    var srcMatch = srcRegex.Match(imgTag);
+                    var altMatch = altRegex.Match(imgTag);
+
+                    if (srcMatch.Success && altMatch.Success)
+                    {
+                        var srcText = srcMatch.Groups[1].Value;
+                        var altText = altMatch.Groups[1].Value;
 
                         var siteGameNormal = NormalizeGameName(altText);
 
-                        // If the normalized names match (e.g., "Final Fantasy VII" matches "finalfantasyvii")
-                        if (siteGameNormal == targetNameNormal || siteGameNormal.Contains(targetNameNormal))
+                        if (!string.IsNullOrEmpty(siteGameNormal) && 
+                           (siteGameNormal == targetNameNormal || siteGameNormal.Contains(targetNameNormal)))
                         {
-                            // Fix relative URLs (e.g., "/images/ff7.gif" -> "https://memcard.art/images/ff7.gif")
                             string fullImageUrl = srcText.StartsWith("/") ? baseUrl + srcText : srcText;
+                            if (!fullImageUrl.StartsWith("http")) fullImageUrl = baseUrl + "/" + srcText;
 
                             logger.Info($"Found matching icon for {gameName}: {fullImageUrl}");
-                            
-                            // Return the URL. Playnite will automatically download it and save it as the icon!
                             return new MetadataFile(fullImageUrl);
                         }
                     }
                 }
-                
+
                 logger.Info($"No memcard.art icon found for {gameName}.");
             }
             catch (Exception ex)
@@ -82,7 +108,6 @@ namespace MemcardArtPlugin
                 logger.Error(ex, $"Error fetching metadata from memcard.art for {gameName}");
             }
 
-            // Return empty if nothing is found
             return base.GetIcon(args);
         }
     }
