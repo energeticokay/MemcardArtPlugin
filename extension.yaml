@@ -1,0 +1,6 @@
+Id: "MemcardArt_Metadata_Provider_9999"
+Name: "Memcard.art Metadata"
+Author: "energeticokay"
+Version: "1.0.0"
+Module: "MemcardArtPlugin.dll"
+Type: MetadataProvider
