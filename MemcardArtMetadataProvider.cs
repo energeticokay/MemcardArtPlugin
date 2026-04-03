@@ -9,7 +9,6 @@ using System.Text.RegularExpressions;
 
 namespace MemcardArtPlugin
 {
-    // These classes map the hidden WordPress API response
     public class WpPost
     {
         public WpContent content { get; set; }
@@ -46,7 +45,6 @@ namespace MemcardArtPlugin
                 // Force modern secure connections
                 ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
 
-                // 1. Ask the hidden WordPress API to search for the game
                 string searchUrl = $"https://memcard.art/wp-json/wp/v2/posts?search={Uri.EscapeDataString(gameName)}&per_page=3";
                 
                 using (var webClient = new WebClient())
@@ -54,7 +52,6 @@ namespace MemcardArtPlugin
                     webClient.Headers.Add("User-Agent", "Playnite Metadata Plugin");
                     string jsonResponse = webClient.DownloadString(searchUrl);
 
-                    // 2. Parse the results using Playnite's native JSON reader
                     var posts = Serialization.FromJson<List<WpPost>>(jsonResponse);
 
                     if (posts == null || posts.Count == 0)
@@ -63,12 +60,10 @@ namespace MemcardArtPlugin
                         return base.GetIcon(args);
                     }
 
-                    // Look through the top results
                     foreach (var post in posts)
                     {
                         string postContent = post.content?.rendered ?? "";
                         
-                        // 3. Find all images inside the post's code
                         var urlRegex = new Regex(@"(https://memcard\.art/wp-content/uploads/[^""\s]+\.(?:gif|png))", RegexOptions.IgnoreCase);
                         var matches = urlRegex.Matches(postContent);
 
@@ -79,13 +74,17 @@ namespace MemcardArtPlugin
                         {
                             string url = match.Groups[1].Value;
                             
-                            // Skip the multi-icon preview grids (we want the single memory card)
-                            if (url.Contains("-MI.", StringComparison.OrdinalIgnoreCase)) continue;
+                            // .NET 4.6.2 compatible check for the "-MI." string (Multi-Icon grid preview)
+                            if (url.IndexOf("-MI.", StringComparison.OrdinalIgnoreCase) >= 0) 
+                            {
+                                continue;
+                            }
 
-                            // Score the image to ensure we get the best quality version
                             int score = 0;
-                            if (url.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)) score += 10; // Prefer animated GIFs!
-                            if (url.Contains("-256")) score += 5; // Prefer high res 256px over 32px
+                            if (url.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)) score += 10;
+                            
+                            // .NET 4.6.2 compatible check for "-256"
+                            if (url.IndexOf("-256", StringComparison.OrdinalIgnoreCase) >= 0) score += 5;
 
                             if (score > bestScore)
                             {
